@@ -52,8 +52,7 @@
   },
   "homepage": "https://github.com/DanMat/query-fetch#readme",
   "publishConfig": {
-    "access": "public",
-    "provenance": true
+    "access": "public"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^2.1.8",
