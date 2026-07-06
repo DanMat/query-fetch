@@ -132,6 +132,126 @@ describe("query", () => {
   });
 });
 
+describe("retry", () => {
+  // Fast, deterministic backoff for tests.
+  const fast = (retries: number, extra = {}) => ({
+    retries,
+    minDelay: 1,
+    maxDelay: 2,
+    jitter: false,
+    ...extra,
+  });
+
+  it("retries a retryable status, then succeeds", async () => {
+    const { impl, calls } = fakeFetch((n) =>
+      n < 2
+        ? new Response("busy", { status: 503 })
+        : new Response("ok", { status: 200 }),
+    );
+
+    const res = await query("https://api.test/s", {
+      json: {},
+      retry: fast(3),
+      fetch: impl,
+    });
+
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(3);
+  });
+
+  it("does not retry a non-retryable status", async () => {
+    const { impl, calls } = fakeFetch(new Response("bad", { status: 400 }));
+
+    const res = await query("https://api.test/s", {
+      json: {},
+      retry: fast(3),
+      fetch: impl,
+    });
+
+    expect(res.status).toBe(400);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("returns the last response after exhausting retries", async () => {
+    const { impl, calls } = fakeFetch(new Response("busy", { status: 503 }));
+    const attempts: number[] = [];
+
+    const res = await query("https://api.test/s", {
+      json: {},
+      retry: fast(2, {
+        onRetry: (c: { attempt: number }) => attempts.push(c.attempt),
+      }),
+      fetch: impl,
+    });
+
+    expect(res.status).toBe(503);
+    expect(calls).toHaveLength(3); // initial + 2 retries
+    expect(attempts).toEqual([1, 2]);
+  });
+
+  it("retries a thrown network error, then succeeds", async () => {
+    let n = 0;
+    const impl = vi.fn(async () => {
+      n += 1;
+      if (n === 1) throw new TypeError("network down");
+      return new Response("ok", { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const res = await query("https://api.test/s", {
+      json: {},
+      retry: fast(2),
+      fetch: impl,
+    });
+
+    expect(res.status).toBe(200);
+    expect(n).toBe(2);
+  });
+
+  it("does not retry an AbortError", async () => {
+    let n = 0;
+    const impl = vi.fn(async () => {
+      n += 1;
+      const err = new Error("aborted");
+      err.name = "AbortError";
+      throw err;
+    }) as unknown as typeof fetch;
+
+    await expect(
+      query("https://api.test/s", { json: {}, retry: fast(3), fetch: impl }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(n).toBe(1);
+  });
+
+  it("honors a custom retryOn predicate", async () => {
+    const { impl, calls } = fakeFetch((n) =>
+      n < 1
+        ? new Response("teapot", { status: 418 })
+        : new Response("ok", { status: 200 }),
+    );
+
+    const res = await query("https://api.test/s", {
+      json: {},
+      retry: fast(2, {
+        retryOn: ({ response }: { response?: Response }) =>
+          response?.status === 418,
+      }),
+      fetch: impl,
+    });
+
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("is off by default", async () => {
+    const { impl, calls } = fakeFetch(new Response("busy", { status: 503 }));
+
+    const res = await query("https://api.test/s", { json: {}, fetch: impl });
+
+    expect(res.status).toBe(503);
+    expect(calls).toHaveLength(1);
+  });
+});
+
 describe("queryJson", () => {
   it("parses the JSON body and returns the response", async () => {
     const { impl } = fakeFetch(

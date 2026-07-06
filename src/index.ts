@@ -10,6 +10,9 @@
 /** Status codes that signal a server does not understand the QUERY method. */
 const METHOD_UNSUPPORTED_STATUSES = new Set([405, 501]);
 
+/** Statuses worth retrying for an idempotent request. */
+const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+
 /** Default header used to tunnel the intended method when falling back to POST. */
 const DEFAULT_OVERRIDE_HEADER = "X-HTTP-Method-Override";
 
@@ -25,6 +28,40 @@ export class QueryError extends Error {
     // Restore prototype chain for transpiled/ES5 targets.
     Object.setPrototypeOf(this, QueryError.prototype);
   }
+}
+
+/** Details about a failed attempt, passed to retry callbacks. */
+export interface RetryContext {
+  /** 1-based number of the retry about to happen (or being decided). */
+  attempt: number;
+  /** The response received, when the failure was an HTTP status. */
+  response?: Response;
+  /** The error thrown, when the failure was a network/abort error. */
+  error?: unknown;
+}
+
+/** Controls automatic retries. See {@link QueryOptions.retry}. */
+export interface RetryOptions {
+  /** Maximum number of retries after the initial attempt. */
+  retries: number;
+  /** Base backoff delay in milliseconds. Default `200`. */
+  minDelay?: number;
+  /** Maximum backoff delay in milliseconds. Default `10000`. */
+  maxDelay?: number;
+  /** Exponential backoff multiplier. Default `2`. */
+  factor?: number;
+  /** Apply random jitter to spread retries out. Default `true`. */
+  jitter?: boolean;
+  /** Honor a `Retry-After` response header (e.g. on 429/503). Default `true`. */
+  respectRetryAfter?: boolean;
+  /**
+   * Decide whether a failed attempt should be retried. By default, network
+   * errors and the statuses 408/425/429/500/502/503/504 are retried, while
+   * aborts are not. QUERY is idempotent, so retrying is safe.
+   */
+  retryOn?: (context: RetryContext) => boolean | Promise<boolean>;
+  /** Called before each backoff wait, with the chosen delay. */
+  onRetry?: (context: RetryContext & { delay: number }) => void;
 }
 
 /** Options for {@link query}. Extends `RequestInit` minus the fields we own. */
@@ -66,6 +103,16 @@ export interface QueryOptions extends Omit<RequestInit, "method" | "body"> {
   methodOverrideHeader?: string | false;
 
   /**
+   * Automatically retry transient failures. Pass a number for "retry N times
+   * with sensible backoff", or a {@link RetryOptions} object for full control.
+   * Because QUERY is idempotent, retrying is safe — unlike POST. Off unless set.
+   *
+   * Retries reuse a buffered body (a string, bytes, or `json`); a streaming
+   * body can only be sent once and won't be retried.
+   */
+  retry?: number | RetryOptions;
+
+  /**
    * A `fetch` implementation to use instead of the global. Handy for testing
    * or for runtimes that expose `fetch` on a client rather than globally.
    */
@@ -76,6 +123,17 @@ export interface QueryOptions extends Omit<RequestInit, "method" | "body"> {
 export interface QueryJsonResult<T> {
   data: T;
   response: Response;
+}
+
+interface ResolvedRetry {
+  retries: number;
+  minDelay: number;
+  maxDelay: number;
+  factor: number;
+  jitter: boolean;
+  respectRetryAfter: boolean;
+  retryOn: (context: RetryContext) => boolean | Promise<boolean>;
+  onRetry?: (context: RetryContext & { delay: number }) => void;
 }
 
 function resolveFetch(custom?: typeof fetch): typeof fetch {
@@ -126,6 +184,87 @@ function prepare(options: QueryOptions): {
   return { headers, body };
 }
 
+function isAbortError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { name?: string }).name === "AbortError"
+  );
+}
+
+function defaultRetryOn(context: RetryContext): boolean {
+  if (context.error !== undefined) return !isAbortError(context.error);
+  if (context.response) return RETRYABLE_STATUSES.has(context.response.status);
+  return false;
+}
+
+function resolveRetry(
+  retry: number | RetryOptions | undefined,
+): ResolvedRetry | null {
+  if (retry === undefined) return null;
+  const opts = typeof retry === "number" ? { retries: retry } : retry;
+  if (!opts.retries || opts.retries < 1) return null;
+  return {
+    retries: opts.retries,
+    minDelay: opts.minDelay ?? 200,
+    maxDelay: opts.maxDelay ?? 10_000,
+    factor: opts.factor ?? 2,
+    jitter: opts.jitter ?? true,
+    respectRetryAfter: opts.respectRetryAfter ?? true,
+    retryOn: opts.retryOn ?? defaultRetryOn,
+    onRetry: opts.onRetry,
+  };
+}
+
+function parseRetryAfter(value: string | null): number | null {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const date = Date.parse(value);
+  if (Number.isNaN(date)) return null;
+  return Math.max(0, date - Date.now());
+}
+
+function backoffDelay(
+  cfg: ResolvedRetry,
+  attemptIndex: number,
+  response?: Response,
+): number {
+  if (cfg.respectRetryAfter && response) {
+    const retryAfter = parseRetryAfter(response.headers.get("retry-after"));
+    if (retryAfter !== null) return retryAfter;
+  }
+  const base = Math.min(
+    cfg.maxDelay,
+    cfg.minDelay * cfg.factor ** attemptIndex,
+  );
+  return cfg.jitter ? base / 2 + Math.random() * (base / 2) : base;
+}
+
+function abortError(): Error {
+  const error = new Error("The operation was aborted.");
+  error.name = "AbortError";
+  return error;
+}
+
+function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortError());
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        reject(abortError());
+      },
+      { once: true },
+    );
+  });
+}
+
 /**
  * Perform an HTTP QUERY request (RFC 10008).
  *
@@ -141,6 +280,7 @@ function prepare(options: QueryOptions): {
  * const res = await query("https://api.example.com/search", {
  *   json: { filter: { status: "active" }, sort: "-createdAt" },
  *   accept: "application/json",
+ *   retry: 3, // safe: QUERY is idempotent
  * });
  * ```
  */
@@ -156,6 +296,7 @@ export async function query(
     json: _json,
     contentType: _contentType,
     accept: _accept,
+    retry: _retry,
     fallbackToPost = true,
     methodOverrideHeader = DEFAULT_OVERRIDE_HEADER,
     headers: _headers,
@@ -163,30 +304,65 @@ export async function query(
     ...init
   } = options;
 
-  const response = await doFetch(input, {
-    ...init,
-    method: "QUERY",
-    headers,
-    body,
-  });
+  const attempt = async (): Promise<Response> => {
+    const response = await doFetch(input, {
+      ...init,
+      method: "QUERY",
+      headers,
+      body,
+    });
 
-  if (!fallbackToPost || !METHOD_UNSUPPORTED_STATUSES.has(response.status)) {
-    return response;
+    if (!fallbackToPost || !METHOD_UNSUPPORTED_STATUSES.has(response.status)) {
+      return response;
+    }
+
+    // The server doesn't speak QUERY — retry as POST, optionally advertising
+    // the original method so override-aware servers can still treat it as one.
+    const fallbackHeaders = new Headers(headers);
+    if (methodOverrideHeader) {
+      fallbackHeaders.set(methodOverrideHeader, "QUERY");
+    }
+
+    return doFetch(input, {
+      ...init,
+      method: "POST",
+      headers: fallbackHeaders,
+      body,
+    });
+  };
+
+  const retryCfg = resolveRetry(options.retry);
+  if (!retryCfg) return attempt();
+
+  const signal = init.signal ?? null;
+  for (let i = 0; ; i++) {
+    let response: Response | undefined;
+    let caught: unknown;
+    try {
+      response = await attempt();
+    } catch (error) {
+      caught = error;
+    }
+
+    const isLastAttempt = i >= retryCfg.retries;
+    const context: RetryContext = { attempt: i + 1, response, error: caught };
+
+    if (caught !== undefined) {
+      if (
+        isLastAttempt ||
+        isAbortError(caught) ||
+        !(await retryCfg.retryOn(context))
+      ) {
+        throw caught;
+      }
+    } else if (isLastAttempt || !(await retryCfg.retryOn(context))) {
+      return response as Response;
+    }
+
+    const delay = backoffDelay(retryCfg, i, response);
+    retryCfg.onRetry?.({ ...context, delay });
+    await sleep(delay, signal);
   }
-
-  // The server doesn't speak QUERY — retry as POST, optionally advertising the
-  // original method so override-aware servers can still treat it as a query.
-  const fallbackHeaders = new Headers(headers);
-  if (methodOverrideHeader) {
-    fallbackHeaders.set(methodOverrideHeader, "QUERY");
-  }
-
-  return doFetch(input, {
-    ...init,
-    method: "POST",
-    headers: fallbackHeaders,
-    body,
-  });
 }
 
 /**

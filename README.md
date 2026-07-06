@@ -39,6 +39,7 @@ Scripted `fetch(url, { method: "QUERY", body })` already works in modern runtime
 - ✅ **Enforces `Content-Type`** — the RFC requires servers to reject a QUERY whose body has no content type. We throw *before* the round-trip instead of letting you debug a `400`.
 - ✅ **Transparent `POST` fallback** — servers that don't understand QUERY yet respond `405`/`501`; we automatically retry as `POST` and advertise the original method via `X-HTTP-Method-Override` so override-aware backends still route it correctly.
 - ✅ **`Accept` negotiation** — pass a media type (or list) to negotiate the response format the RFC's `Accept-Query` dance is built around.
+- ✅ **Safe automatic retry** (opt-in) — QUERY is *idempotent by definition*, so retrying transient failures is safe here in a way it never is for `POST`. Exponential backoff + jitter, honours `Retry-After`.
 - ✅ **Redirect-safe** — the RFC's `303 See Other` indirect-result pattern is handled by `fetch`'s own redirect following; nothing surprising here.
 - ✅ **Zero dependencies, fully typed, tree-shakeable**, dual ESM/CJS.
 
@@ -69,6 +70,37 @@ await query("https://api.example.com/search", {
 });
 ```
 
+### Automatic retry (safe, because QUERY is idempotent)
+
+RFC 10008 defines QUERY as safe and idempotent — so unlike `POST`, retrying a
+failed request can't cause a double-effect. Opt in with a count, or an object
+for full control:
+
+```ts
+// Retry up to 3 times with exponential backoff + jitter.
+await query(url, { json, retry: 3 });
+
+// Full control.
+await query(url, {
+  json,
+  retry: {
+    retries: 5,
+    minDelay: 200, // base backoff (ms)
+    maxDelay: 10_000,
+    factor: 2,
+    jitter: true,
+    respectRetryAfter: true, // honour Retry-After on 429/503
+    retryOn: ({ response, error }) =>
+      Boolean(error) || (response?.status ?? 0) >= 500,
+    onRetry: ({ attempt, delay }) => console.warn(`retry #${attempt} in ${delay}ms`),
+  },
+});
+```
+
+By default it retries network errors and `408/425/429/500/502/503/504`, and
+does **not** retry aborts. Retry is off unless you set it. (Retries reuse a
+buffered body — a string, bytes, or `json`; a streaming body is sent once.)
+
 ### Opt out of the POST fallback
 
 ```ts
@@ -97,6 +129,7 @@ Performs a QUERY request. `options` extends `RequestInit` (so `signal`, `credent
 | `accept` | `string \| string[]` | — | Sets the `Accept` header. |
 | `fallbackToPost` | `boolean` | `true` | Retry as `POST` on `405`/`501`. |
 | `methodOverrideHeader` | `string \| false` | `"X-HTTP-Method-Override"` | Header advertising the original method on fallback. |
+| `retry` | `number \| RetryOptions` | off | Auto-retry transient failures (safe: QUERY is idempotent). |
 | `fetch` | `typeof fetch` | `globalThis.fetch` | Custom fetch implementation. |
 
 ### `queryJson<T>(input, options?): Promise<{ data: T; response: Response }>`
