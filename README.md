@@ -114,9 +114,12 @@ QUERY is a **Proposed Standard** (June 2026). Two things to know:
 - **CORS:** QUERY is not a CORS-safelisted method, so a cross-origin QUERY triggers a preflight. Your server must handle `OPTIONS` accordingly.
 - **Spec churn:** browser-integration details (method normalization, caching) are still being ironed out in [whatwg/fetch#1938](https://github.com/whatwg/fetch/issues/1938). This library tracks runtime behavior as it ships.
 
-## Related
+## The `@danmat` QUERY suite
 
-- [`@danmat/accept-query`](https://github.com/DanMat/accept-query) — parse, build, and negotiate the `Accept-Query` response header that pairs with QUERY.
+- **`@danmat/query-fetch`** — client for the QUERY method *(you are here)*.
+- [`@danmat/accept-query`](https://github.com/DanMat/accept-query) — parse/build/negotiate the `Accept-Query` header.
+- [`@danmat/query-cache`](https://github.com/DanMat/query-cache) — body-aware response caching.
+- [`@danmat/query-server`](https://github.com/DanMat/query-server) — server-side request validation & negotiation.
 
 ## License
 
