@@ -1,6 +1,6 @@
 {
   "name": "@danmat/query-fetch",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A tiny, dependency-free client for the HTTP QUERY method (RFC 10008) — the safe, idempotent request with a body. Content-Type enforcement, POST fallback, and Accept negotiation over native fetch.",
   "keywords": [
     "http",
