@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/DanMat/query-fetch/actions/workflows/ci.yml/badge.svg)](https://github.com/DanMat/query-fetch/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@danmat/query-fetch.svg)](https://www.npmjs.com/package/@danmat/query-fetch)
-[![npm bundle size](https://img.shields.io/bundlephobia/minzip/@danmat/query-fetch)](https://bundlephobia.com/package/@danmat/query-fetch)
+[![minified + gzip size](https://img.shields.io/bundlejs/size/@danmat/query-fetch)](https://bundlejs.com/?q=@danmat/query-fetch)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
 A tiny, **dependency-free** client for the HTTP **QUERY** method ([RFC 10008](https://www.rfc-editor.org/rfc/rfc10008)) — the request that is *safe and idempotent like `GET`*, but *carries a body like `POST`*, and *caches like neither before it could*.
