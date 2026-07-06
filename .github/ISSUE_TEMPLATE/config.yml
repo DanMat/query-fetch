@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: The @danmat QUERY suite
+    url: https://github.com/DanMat/query-suite-example
+    about: Docs, a runnable demo, and a live playground for the whole suite.
+  - name: RFC 10008 — The HTTP QUERY Method
+    url: https://www.rfc-editor.org/rfc/rfc10008
+    about: The specification this library implements.

@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { query, queryJson, QueryError } from "../src/index.js";
+import { describe, expect, it, vi } from "vitest";
+import { QueryError, query, queryJson } from "../src/index.js";
 
 /** Build a fake fetch that records the last call and returns a canned Response. */
 function fakeFetch(response: Response | ((n: number) => Response)) {

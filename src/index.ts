@@ -28,8 +28,7 @@ export class QueryError extends Error {
 }
 
 /** Options for {@link query}. Extends `RequestInit` minus the fields we own. */
-export interface QueryOptions
-  extends Omit<RequestInit, "method" | "body"> {
+export interface QueryOptions extends Omit<RequestInit, "method" | "body"> {
   /**
    * The raw query body. Pair with {@link QueryOptions.contentType}. For JSON
    * payloads prefer {@link QueryOptions.json}, which sets the content type for

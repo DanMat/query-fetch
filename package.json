@@ -39,7 +39,13 @@
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "prepare": "husky",
     "prepublishOnly": "npm run build"
+  },
+  "lint-staged": {
+    "*.{ts,js,json,jsonc,md}": "biome check --write --no-errors-on-unmatched"
   },
   "author": "Dan Matthew <dannymatthew@gmail.com>",
   "license": "MIT",
@@ -55,7 +61,10 @@
     "access": "public"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.2",
     "@vitest/coverage-v8": "^2.1.8",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.5.2",
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
